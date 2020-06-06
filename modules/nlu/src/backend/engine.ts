@@ -169,6 +169,10 @@ export default class Engine implements NLUEngine {
 
     const kmeans = computeKmeans(output.intents, tools) // TODO load from artefacts when persisted
 
+    const adjustements = () => {
+      // TODO: load adjustement model from storage
+    }
+
     return {
       ...artefacts,
       ctx_classifier,

@@ -1,5 +1,6 @@
 import * as sdk from 'botpress/sdk'
 import _ from 'lodash'
+import { distance, similarity } from 'ml-distance'
 
 import { extractListEntities, extractPatternEntities } from './entities/custom-entity-extractor'
 import { getSentenceEmbeddingForCtx } from './intents/context-classifier-featurizer'
@@ -280,6 +281,146 @@ async function predictIntent(input: PredictStep, predictors: Predictors): Promis
     ...input,
     intent_predictions: { per_ctx: _.zipObject(ctxToPredict, predictions) }
   }
+}
+
+async function adjustPredictions(input: PredictStep, predictors: Predictors, tools: Tools): Promise<PredictStep> {
+  const { vocabVectors } = predictors
+
+  const json = [
+    {
+      utterance: "it's nice to meet you mr bot",
+      createdAt: '2020-05-14 00:17:43',
+      positive_examples: ['What are you up to?', 'What is up?', 'What are you doing?'],
+      negative_examples: [],
+      language: 'en'
+    },
+    {
+      utterance: "you're not very good man",
+      createdAt: '2020-05-14 00:17:57',
+      positive_examples: ['you are useless', 'What a waste of time you are!', 'you are unpleasant'],
+      negative_examples: [],
+      language: 'en'
+    },
+    {
+      utterance: 'what is the calling they use',
+      createdAt: '2020-05-14 00:18:37',
+      positive_examples: ['What is your name?', 'How should i name you?', 'What name was given to you?'],
+      negative_examples: [
+        'What are you doing?',
+        'What is up?',
+        'whatsup',
+        'wazaa',
+        'What are you up to?',
+        'What are your plans for the day?',
+        'Any plans?',
+        'Tell me what you are doing right now.',
+        'What is new?',
+        'What are you doing next?',
+        'Any big plans for this afternoon?'
+      ],
+      language: 'en'
+    },
+    {
+      utterance: 'penis caca',
+      createdAt: '2020-05-14 00:15:52',
+      positive_examples: ['Lick my balls', 'Suck shit', 'Eat a dick'],
+      negative_examples: [],
+      language: 'en'
+    },
+    {
+      utterance: 'bonjour',
+      createdAt: '2020-05-14 00:15:03',
+      positive_examples: [],
+      negative_examples: [
+        'Hello',
+        'Hi',
+        'Hey',
+        'Heya',
+        'hey there',
+        'bonjour',
+        "sup'",
+        'Heyyyy',
+        'Greetings',
+        'Salutations'
+      ],
+      language: 'en'
+    }
+  ]
+
+  const adjustements = json.map(x => ({
+    utterance: x.utterance,
+    boost_positive: x.positive_examples,
+    boost_negative: x.negative_examples,
+    lang: x.language
+  }))
+
+  const adjustementsModel: {
+    utterance: number[]
+    lang: string
+    boost_positive: number[][]
+    boost_negative: number[][]
+    intent_boost_map: { [key: string]: number }
+  }[] = []
+
+  const MIN_PROXIMITY = 0.6
+  const MAX_ADJUSTEMENTS_TO_APPLY = 1
+  const dist = (a: number[], b: number[]) => similarity.cosine(a, b)
+
+  for (const adjustement of adjustements) {
+    const getEmbeddings = async (texts: string[]) => {
+      texts = texts.map(text => replaceConsecutiveSpaces(text.trim()))
+      const batch = await buildUtteranceBatch(texts, adjustement.lang, tools, vocabVectors)
+      return batch.map(x => x.sentenceEmbedding)
+    }
+    adjustementsModel.push({
+      utterance: (await getEmbeddings([adjustement.utterance]))[0],
+      boost_positive: await getEmbeddings(adjustement.boost_positive),
+      boost_negative: await getEmbeddings(adjustement.boost_negative),
+      lang: adjustement.lang,
+      intent_boost_map: {}
+    })
+  }
+
+  // Find the top X adjustements to apply
+  // For each adjustements
+  //    For all intents, apply positive boosts (cosine)
+  //    For all intents, apply negative boosts (cosine)
+  for (const adjustement of adjustementsModel) {
+    for (const intent of predictors.intents) {
+      const negatives = _.flatten(
+        adjustement.boost_negative.map(a => _.max(intent.utterances.map(b => dist(a, b.sentenceEmbedding))))
+      )
+
+      const positives = _.flatten(
+        adjustement.boost_positive.map(a => _.max(intent.utterances.map(b => dist(a, b.sentenceEmbedding))))
+      )
+
+      adjustement.intent_boost_map[intent.name] = (_.mean(positives) || 0) - (_.mean(negatives) || 0)
+    }
+  }
+
+  ////////////////////////////
+  // Adjustement phase starts here
+
+  if (!adjustementsModel && !adjustementsModel.length) {
+    return input
+  }
+
+  const toApply = adjustementsModel
+    .map(a => ({ ...a, proximity: dist(a.utterance, input.utterance.sentenceEmbedding) }))
+    .filter(x => x.proximity >= MIN_PROXIMITY)
+    .sort((a, b) => b.proximity - a.proximity)
+    .slice(0, MAX_ADJUSTEMENTS_TO_APPLY)
+
+  for (const adjustement of toApply) {
+    for (const intent in adjustement.intent_boost_map) {
+      const ctx = predictors.intents.find(x => x.name === intent).contexts[0]
+      const entry = input.intent_predictions.per_ctx[ctx].find(x => x.label === intent)
+      entry.confidence = entry.confidence + adjustement.intent_boost_map[intent]
+    }
+  }
+
+  return input
 }
 
 // taken from svm classifier #295
@@ -569,6 +710,7 @@ export const Predict = async (
     stepOutput = await predictOutOfScope(stepOutput, predictors, tools)
     stepOutput = await predictContext(stepOutput, predictors)
     stepOutput = await predictIntent(stepOutput, predictors)
+    stepOutput = await adjustPredictions(stepOutput, predictors, tools)
     stepOutput = electIntent(stepOutput)
     stepOutput = detectAmbiguity(stepOutput)
     stepOutput = await extractSlots(stepOutput, predictors)
