@@ -153,7 +153,7 @@ export type ExtractedEntity = {
 export type EntityExtractionResult = ExtractedEntity & { start: number; end: number }
 
 export interface TrainingSession {
-  status: 'training' | 'canceled' | 'done' | 'idle'
+  status: 'training' | 'canceled' | 'done' | 'idle' | 'cancelling'
   language: string
   progress: number
   lock?: sdk.RedisLock
