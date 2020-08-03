@@ -557,6 +557,7 @@ export const Trainer: Trainer = async (input: TrainInput, tools: Tools): Promise
     if (!input.trainingSession) {
       return
     }
+
     if (input.trainingSession.status === 'canceled') {
       tools.reportTrainingProgress(input.botId, 'Currently cancelling...', input.trainingSession)
       throw new TrainingCanceledError()
@@ -576,14 +577,23 @@ export const Trainer: Trainer = async (input: TrainInput, tools: Tools): Promise
     console.log(input.botId, 'Training aborted')
   }
 
-  let step = await PreprocessInput(input, tools)
-  step = await TfidfTokens(step)
-  step = ClusterTokens(step, tools)
-  step = await ExtractEntities(step, tools)
-  step = await AppendNoneIntent(step, tools)
-  const exact_match_index = BuildExactMatchIndex(step)
-
+  const beginTs = Date.now()
+  console.log('Started -->')
+  let step: TrainStep
+  let exact_match_index: ExactMatchIndex
   try {
+    reportProgress(0) // 0%
+    step = await PreprocessInput(input, tools)
+    reportProgress(0) // 0%
+    step = await TfidfTokens(step)
+    reportProgress(0) // 0%
+    step = ClusterTokens(step, tools)
+    reportProgress(0) // 0%
+    step = await ExtractEntities(step, tools)
+    reportProgress(0) // 0%
+    step = await AppendNoneIntent(step, tools)
+    reportProgress(0) // 0%
+    exact_match_index = BuildExactMatchIndex(step) // TODO: (sly) This should be part of the input, not outside
     reportProgress() // 20% done...
   } catch (err) {
     if (err instanceof TrainingCanceledError) {
@@ -593,15 +603,17 @@ export const Trainer: Trainer = async (input: TrainInput, tools: Tools): Promise
     throw err
   }
 
+  console.log('You can cancel -->')
   const models = await Promise.all([
     TrainOutOfScope(step, tools, reportProgress),
     TrainContextClassifier(step, tools, reportProgress),
     TrainIntentClassifier(step, tools, reportProgress),
     TrainSlotTagger(step, tools, reportProgress)
   ])
-
+  console.log('Total time = ' + ((Date.now() - beginTs) / 1000).toFixed(3))
   if (models.some(_.isUndefined)) {
     handleCancellation()
+    console.log('CANCELLED Total time = ' + ((Date.now() - beginTs) / 1000).toFixed(3))
     return
   }
 

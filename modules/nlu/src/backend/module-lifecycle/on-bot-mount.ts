@@ -104,6 +104,7 @@ export function getOnBotMount(state: NLUState) {
       await Promise.map(languages, async lang => {
         const key = makeTrainSessionKey(botId, lang)
         await bp.distributed.clearLock(key)
+        process.send({ type: 'svm_kill', id: 666 })
         return state.broadcastCancelTraining(botId, lang)
       })
     }

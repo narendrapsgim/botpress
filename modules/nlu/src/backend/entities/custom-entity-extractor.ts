@@ -6,6 +6,8 @@ import { extractPattern } from '../tools/patterns-utils'
 import { EntityCache, EntityExtractionResult, ListEntityModel, PatternEntity } from '../typings'
 import Utterance, { UtteranceToken } from '../utterance/utterance'
 
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads'
+
 const ENTITY_SCORE_THRESHOLD = 0.6
 
 function takeUntil(
@@ -129,19 +131,19 @@ function extractForListModel(utterance: Utterance, listModel: ListEntityModel): 
         })
       }
     }
+  }
 
-    for (let i = 0; i < utterance.tokens.length; i++) {
-      const results = _.orderBy(
-        candidates.filter(x => !x.eliminated && x.start <= i && x.end >= i),
-        // we want to favor longer matches (but is obviously less important than score)
-        // so we take its length into account (up to the longest candidate)
-        x => x.score * Math.pow(Math.min(x.source.length, longestCandidate), 1 / 5),
-        'desc'
-      )
-      if (results.length > 1) {
-        const [, ...losers] = results
-        losers.forEach(x => (x.eliminated = true))
-      }
+  for (let i = 0; i < utterance.tokens.length; i++) {
+    const results = _.orderBy(
+      candidates.filter(x => !x.eliminated && x.start <= i && x.end >= i),
+      // we want to favor longer matches (but is obviously less important than score)
+      // so we take its length into account (up to the longest candidate)
+      x => x.score * Math.pow(Math.min(x.source.length, longestCandidate), 1 / 5),
+      'desc'
+    )
+    if (results.length > 1) {
+      const [, ...losers] = results
+      losers.forEach(x => (x.eliminated = true))
     }
   }
 

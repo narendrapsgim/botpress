@@ -7,13 +7,13 @@ import nanoid from 'nanoid'
 import { registerMsgHandler, spawnMLWorkers, WORKER_TYPES } from '../cluster'
 
 import { Tagger, Trainer as CRFTrainer } from './crf'
+import { CRFTrainingPool } from './crf-pool'
 import { FastTextModel } from './fasttext'
 import computeJaroWinklerDistance from './homebrew/jaro-winkler'
 import computeLevenshteinDistance from './homebrew/levenshtein'
 import { processor } from './sentencepiece'
 import { Predictor, Trainer as SVMTrainer } from './svm'
 import { SVMTrainingPool } from './svm-pool'
-import { CRFTrainingPool } from './crf-pool'
 
 type MsgType =
   | 'svm_train'
@@ -157,7 +157,7 @@ if (cluster.isWorker) {
           msg.payload.points,
           msg.payload.options,
           progress => {
-            if (++svmProgressCalls % 10 === 0 || progress === 1) {
+            if (++svmProgressCalls % 1 === 0 || progress === 1) {
               process.send!({ type: 'svm_progress', id: msg.id, payload: { progress }, workerPid: process.pid })
             }
           },
@@ -178,7 +178,10 @@ if (cluster.isWorker) {
           elements,
           params,
           iteration => {
-            process.send!({ type: 'crf_progress', id: msg.id, payload: { iteration }, workerPid: process.pid })
+            if (iteration % 100 === 0) {
+              process.send!({ type: 'crf_progress', id: msg.id, payload: { iteration }, workerPid: process.pid })
+            }
+
             return 0
           },
           model => process.send!({ type: 'crf_done', id: msg.id, payload: { crfModelFilename: model } }),

@@ -13,9 +13,7 @@
       "env": {
         "BP_MODULES_PATH": "${workspaceFolder}/modules:${workspaceFolder}/internal-modules",
         "NODE_PATH": "${workspaceFolder}/out/bp",
-        "DEBUG": "bp:none",
-        "BLUEBIRD_DEBUG": "1",
-        "TELEMETRY_URL": "https://telemetry.botpress.dev/ingest"
+        "DEBUG": "bp:none"
       },
       "smartStep": true,
       "outFiles": [
@@ -24,7 +22,7 @@
         "${workspaceFolder}/private-modules/*/dist",
         "!${workspaceFolder}/**/node_modules"
       ],
-      "console": "integratedTerminal",
+      "console": "internalConsole",
       "sourceMaps": true,
       "autoAttachChildProcesses": true
     },

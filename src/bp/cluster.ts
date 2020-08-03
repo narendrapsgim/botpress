@@ -125,6 +125,11 @@ export async function spawnMLWorkers(logger?: sdk.Logger) {
 
   process.ML_WORKERS = await Promise.map(_.range(numMLWorkers), () => {
     const worker = cluster.fork({ WORKER_TYPE: WORKER_TYPES.ML })
+    process.on('message', message => {
+      if (message.type === 'svm_kill') {
+        worker.send(message)
+      }
+    })
     return Promise.fromCallback(cb => worker.on('online', () => cb(undefined, worker.id)))
   })
   spawnMLWorkersCount++
