@@ -155,6 +155,7 @@ export interface ExtractedEntity {
 export type EntityExtractionResult = ExtractedEntity & { start: number; end: number }
 
 export interface TrainingSession {
+  id: string
   status: 'training' | 'canceled' | 'done' | 'idle'
   language: string
   progress: number

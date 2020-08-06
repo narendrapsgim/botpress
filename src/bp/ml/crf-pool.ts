@@ -1,4 +1,5 @@
 import * as sdk from 'botpress/sdk'
+
 import { Trainer } from './crf'
 
 export class CRFTrainingPool {
@@ -6,6 +7,7 @@ export class CRFTrainingPool {
 
   public async startTraining(
     trainingId: string,
+    trainSessionId: string,
     elements: sdk.MLToolkit.CRF.DataPoint[],
     options: sdk.MLToolkit.CRF.TrainerOptions,
     progress: (iteration: number) => void,
@@ -14,9 +16,10 @@ export class CRFTrainingPool {
   ) {
     if (!!this.currentCrfs[trainingId]) {
       error(new Error('this exact crf training was already started'))
+      return
     }
 
-    this.currentCrfs[trainingId] = new Trainer()
+    this.currentCrfs[trainingId] = new Trainer(trainSessionId)
     try {
       const result = await this.currentCrfs[trainingId].train(elements, options, progress)
       complete(result)

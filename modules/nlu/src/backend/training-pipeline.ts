@@ -35,11 +35,12 @@ export type TrainInput = Readonly<{
   list_entities: ListEntity[]
   contexts: string[]
   intents: Intent<string>[]
-  trainingSession?: TrainingSession
+  trainingSession: TrainingSession
   ctxToTrain: string[]
 }>
 
 type TrainStep = Readonly<{
+  trainSessionId: string
   botId: string
   languageCode: string
   list_entities: ListEntityModel[]
@@ -101,7 +102,8 @@ const PreprocessInput = async (input: TrainInput, tools: Tools): Promise<TrainSt
   const vocabVectors = buildVectorsVocab(intents)
 
   return {
-    ..._.omit(input, 'list_entities', 'intents'),
+    ..._.omit(input, 'list_entities', 'intents', 'trainingSession'),
+    trainSessionId: input.trainingSession?.id,
     list_entities,
     intents,
     vocabVectors
@@ -255,20 +257,21 @@ const TrainIntentClassifier = async (
 
     resetSeed()
 
-    if (points.length <= 0) {
-      progress(1 / input.ctxToTrain.length)
-      continue
-    }
-    const svm = new tools.mlToolkit.SVM.Trainer()
-
     let model: string
     try {
+      if (points.length <= 0) {
+        progress(1 / input.ctxToTrain.length)
+        continue
+      }
+
+      const svm = new tools.mlToolkit.SVM.Trainer(input.trainSessionId)
       model = await svm.train(points, { kernel: 'LINEAR', classifier: 'C_SVC' }, p => {
         const completion = (i + p) / input.ctxToTrain.length
         progress(completion)
       })
     } catch (err) {
       if (err instanceof TrainingCanceledError) {
+        // console.log('TrainIntentClassifier has canceled')
         return
       }
       throw err
@@ -305,7 +308,7 @@ const TrainContextClassifier = async (
     return ''
   }
 
-  const svm = new tools.mlToolkit.SVM.Trainer()
+  const svm = new tools.mlToolkit.SVM.Trainer(input.trainSessionId)
 
   let model: string
   try {
@@ -314,6 +317,7 @@ const TrainContextClassifier = async (
     })
   } catch (err) {
     if (err instanceof TrainingCanceledError) {
+      // console.log('TrainContextClassifier has canceled')
       return
     }
     throw err
@@ -469,10 +473,12 @@ const TrainSlotTagger = async (input: TrainStep, tools: Tools, progress: progres
   try {
     await slotTagger.train(
       input.intents.filter(i => i.name !== NONE_INTENT),
-      () => progress(0) // not increasing actual progress but checking if training was cancelled
+      () => progress(0), // not increasing actual progress but checking if training was cancelled
+      input.trainSessionId
     )
   } catch (err) {
     if (err instanceof TrainingCanceledError) {
+      // console.log('TrainSlotTagger has canceled')
       return
     }
     throw err
@@ -517,9 +523,10 @@ const TrainOutOfScope = async (
       .flatMap(i => featurizeInScopeUtterances(i.utterances, i.name))
       .value()
 
-    const svm = new tools.mlToolkit.SVM.Trainer()
+    const svm = new tools.mlToolkit.SVM.Trainer(input.trainSessionId)
     let model: string
     try {
+      progress(combinedProgress)
       model = await svm.train([...in_ctx_scope_points, ...oos_points], trainingOptions, p => {
         combinedProgress += p / input.ctxToTrain.length
         progress(combinedProgress)
@@ -531,10 +538,14 @@ const TrainOutOfScope = async (
       throw err
     }
 
+    if (!model) {
+      return
+    }
     return [ctx, model] as [string, string]
   })
 
   if (ctxModels.some(m => !m)) {
+    // console.log('TrainOutOfScope has canceled')
     return
   }
 

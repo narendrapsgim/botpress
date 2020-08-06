@@ -2,25 +2,24 @@ import * as sdk from 'botpress/sdk'
 import cluster, { Worker } from 'cluster'
 import _ from 'lodash'
 import kmeans from 'ml-kmeans'
-import nanoid from 'nanoid'
 
 import { registerMsgHandler, spawnMLWorkers, WORKER_TYPES } from '../cluster'
 
 import { Tagger, Trainer as CRFTrainer } from './crf'
+import { CRFTrainingPool } from './crf-pool'
 import { FastTextModel } from './fasttext'
 import computeJaroWinklerDistance from './homebrew/jaro-winkler'
 import computeLevenshteinDistance from './homebrew/levenshtein'
 import { processor } from './sentencepiece'
 import { Predictor, Trainer as SVMTrainer } from './svm'
 import { SVMTrainingPool } from './svm-pool'
-import { CRFTrainingPool } from './crf-pool'
 
 type MsgType =
   | 'svm_train'
   | 'svm_progress'
   | 'svm_done'
   | 'svm_error'
-  | 'svm_kill'
+  | 'svm_kill_all'
   | 'crf_train'
   | 'crf_progress'
   | 'crf_done'
@@ -29,9 +28,13 @@ type MsgType =
 
 interface Message {
   type: MsgType
-  id: string
+  trainSessionId: string
+  workerPid?: number
+}
+
+interface TrainingMessage extends Message {
+  trainingId: string
   payload: any
-  workerPid: number
 }
 
 // assuming 10 bots, 10 ctx * (oos, intent) + ndu + ctx cls + slot tagger
@@ -43,7 +46,7 @@ const MLToolkit: typeof sdk.MLToolkit = {
     kmeans
   },
   CRF: {
-    Tagger: Tagger,
+    Tagger,
     Trainer: CRFTrainer
   },
   SVM: {
@@ -56,17 +59,16 @@ const MLToolkit: typeof sdk.MLToolkit = {
 }
 
 function overloadTrainers() {
-  MLToolkit.SVM.Trainer.prototype.train = (
+  MLToolkit.SVM.Trainer.prototype.train = function(
     points: sdk.MLToolkit.SVM.DataPoint[],
     options?: Partial<sdk.MLToolkit.SVM.SVMOptions>,
     progressCb?: sdk.MLToolkit.SVM.TrainProgressCallback | undefined
-  ): any => {
+  ): any {
     process.setMaxListeners(MAX_TRAINING_LISTENENRS)
 
     return Promise.fromCallback(completedCb => {
-      const id = nanoid()
-      const messageHandler = (msg: Message) => {
-        if (msg.id !== id) {
+      const messageHandler = (msg: TrainingMessage) => {
+        if (msg.trainingId !== this.trainingId) {
           return
         }
         if (progressCb && msg.type === 'svm_progress') {
@@ -75,8 +77,9 @@ function overloadTrainers() {
           } catch (err) {
             completedCb(err)
 
-            const { workerPid } = msg
-            process.send!({ type: 'svm_kill', id: msg.id, payload: {}, workerPid })
+            const { trainSessionId, workerPid } = msg
+            const killMsg: Message = { type: 'svm_kill_all', trainSessionId, workerPid }
+            process.send!(killMsg) // kill all of worker's svm
 
             process.off('message', messageHandler)
           }
@@ -93,20 +96,21 @@ function overloadTrainers() {
         }
       }
 
-      process.send!({ type: 'svm_train', id, payload: { points, options } })
+      const { trainingId, trainSessionId } = this
+      const trainMsg: TrainingMessage = { type: 'svm_train', trainingId, trainSessionId, payload: { points, options } }
+      process.send!(trainMsg)
       process.on('message', messageHandler)
     })
   }
 
-  MLToolkit.CRF.Trainer.prototype.train = (
+  MLToolkit.CRF.Trainer.prototype.train = function(
     elements: sdk.MLToolkit.CRF.DataPoint[],
     params: sdk.MLToolkit.CRF.TrainerOptions,
     progressCb?: (iteration: number) => void
-  ): Promise<string> => {
+  ): Promise<string> {
     return Promise.fromCallback(completedCb => {
-      const id = nanoid()
-      const messageHandler = (msg: Message) => {
-        if (msg.id !== id) {
+      const messageHandler = (msg: TrainingMessage) => {
+        if (msg.trainingId !== this.trainingId) {
           return
         }
 
@@ -117,7 +121,8 @@ function overloadTrainers() {
             completedCb(err)
 
             const { workerPid } = msg
-            process.send!({ type: 'crf_kill', id: msg.id, payload: {}, workerPid })
+            const killMsg: TrainingMessage = { type: 'crf_kill', trainingId, trainSessionId, payload: {}, workerPid }
+            process.send!(killMsg)
 
             process.off('message', messageHandler)
           }
@@ -134,7 +139,9 @@ function overloadTrainers() {
         }
       }
 
-      process.send!({ type: 'crf_train', id, payload: { elements, params } })
+      const { trainingId, trainSessionId } = this
+      const trainMsg: TrainingMessage = { type: 'crf_train', trainingId, trainSessionId, payload: { elements, params } }
+      process.send!(trainMsg)
       process.on('message', messageHandler)
     }) as any
   }
@@ -147,47 +154,83 @@ if (cluster.isWorker) {
   if (process.env.WORKER_TYPE === WORKER_TYPES.ML) {
     const svmPool = new SVMTrainingPool() // one svm pool per ml worker
     const crfPool = new CRFTrainingPool()
-    async function messageHandler(msg: Message) {
+    async function messageHandler(msg: TrainingMessage) {
       if (msg.type === 'svm_train') {
+        const { trainingId, trainSessionId, payload } = msg
+        const { points, options } = payload
         let svmProgressCalls = 0
 
         // tslint:disable-next-line: no-floating-promises
         await svmPool.startTraining(
-          msg.id,
-          msg.payload.points,
-          msg.payload.options,
+          trainingId,
+          trainSessionId,
+          points,
+          options,
           progress => {
             if (++svmProgressCalls % 10 === 0 || progress === 1) {
-              process.send!({ type: 'svm_progress', id: msg.id, payload: { progress }, workerPid: process.pid })
+              const progressMsg: TrainingMessage = {
+                type: 'svm_progress',
+                trainingId,
+                trainSessionId,
+                payload: { progress },
+                workerPid: process.pid
+              }
+              process.send!(progressMsg)
             }
           },
-          result => process.send!({ type: 'svm_done', id: msg.id, payload: { result } }),
-          error => process.send!({ type: 'svm_error', id: msg.id, payload: { error } })
+          result => {
+            const completedMsg: TrainingMessage = { type: 'svm_done', trainingId, trainSessionId, payload: { result } }
+            process.send!(completedMsg)
+          },
+          error => {
+            const errorMsg: TrainingMessage = { type: 'svm_error', trainingId, trainSessionId, payload: { error } }
+            process.send!(errorMsg)
+          }
         )
       }
 
-      if (msg.type === 'svm_kill') {
-        svmPool.cancelTraining(msg.id)
+      if (msg.type === 'svm_kill_all') {
+        svmPool.cancelAll(msg.trainSessionId)
       }
 
       if (msg.type === 'crf_train') {
-        const { elements, params } = msg.payload
+        const { trainingId, trainSessionId, payload } = msg
+        const { elements, params } = payload
         // tslint:disable-next-line: no-floating-promises
         crfPool.startTraining(
-          msg.id,
+          msg.trainingId,
+          msg.trainSessionId,
           elements,
           params,
           iteration => {
-            process.send!({ type: 'crf_progress', id: msg.id, payload: { iteration }, workerPid: process.pid })
+            const progressMsg: TrainingMessage = {
+              type: 'crf_progress',
+              trainingId,
+              trainSessionId,
+              payload: { iteration },
+              workerPid: process.pid
+            }
+            process.send!(progressMsg)
             return 0
           },
-          model => process.send!({ type: 'crf_done', id: msg.id, payload: { crfModelFilename: model } }),
-          error => process.send!({ type: 'crf_error', id: msg.id, payload: { error } })
+          crfModelFilename => {
+            const completedMsg: TrainingMessage = {
+              type: 'crf_done',
+              trainingId,
+              trainSessionId,
+              payload: { crfModelFilename }
+            }
+            process.send!(completedMsg)
+          },
+          error => {
+            const errorMsg: TrainingMessage = { type: 'crf_error', trainingId, trainSessionId, payload: { error } }
+            process.send!(errorMsg)
+          }
         )
       }
 
       if (msg.type === 'crf_kill') {
-        crfPool.cancelTraining(msg.id)
+        crfPool.cancelTraining(msg.trainingId)
       }
     }
 
@@ -233,13 +276,14 @@ if (cluster.isMaster) {
   registerMsgHandler('svm_progress', sendToWebWorker)
   registerMsgHandler('svm_error', sendToWebWorker)
   registerMsgHandler('svm_train', async (msg: Message) => (await pickMLWorker()).send(msg))
-  registerMsgHandler('svm_kill', async (msg: Message) => getMLWorker(msg.workerPid)?.send(msg))
+  // TODO: broadcast on all workers instead of killing only svm of current worker
+  registerMsgHandler('svm_kill_all', async (msg: Message) => getMLWorker(msg.workerPid)?.send(msg))
 
   registerMsgHandler('crf_done', sendToWebWorker)
   registerMsgHandler('crf_progress', sendToWebWorker)
   registerMsgHandler('crf_error', sendToWebWorker)
   registerMsgHandler('crf_train', async (msg: Message) => (await pickMLWorker()).send(msg))
-  registerMsgHandler('crf_kill', async (msg: Message) => getMLWorker(msg.workerPid)?.send(msg))
+  registerMsgHandler('crf_kill', async (msg: TrainingMessage) => getMLWorker(msg.workerPid)?.send(msg))
 }
 
 export default MLToolkit

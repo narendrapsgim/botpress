@@ -386,9 +386,11 @@ declare module 'botpress/sdk' {
       }
 
       export class Trainer {
-        constructor()
+        constructor(trainSessionId: string)
         train(points: DataPoint[], options?: Partial<SVMOptions>, callback?: TrainProgressCallback): Promise<string>
         isTrained(): boolean
+        readonly trainingId: string
+        readonly trainSessionId: string
       }
 
       export class Predictor {
@@ -437,11 +439,14 @@ declare module 'botpress/sdk' {
       }
 
       export class Trainer {
+        constructor(trainSessionId: string)
         train(
           elements: DataPoint[],
           options: TrainerOptions,
           progressCallback?: (iteration: number) => void
         ): Promise<string>
+        readonly trainingId: string
+        readonly trainSessionId: string
       }
     }
 

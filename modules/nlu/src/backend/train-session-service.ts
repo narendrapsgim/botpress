@@ -1,5 +1,6 @@
 import * as sdk from 'botpress/sdk'
 import _ from 'lodash'
+import nanoid from 'nanoid'
 
 import { TrainingSession } from './typings'
 
@@ -11,6 +12,7 @@ const DEFAULT_TRAINING_SESSION: Partial<TrainingSession> = {
 export const makeTrainSessionKey = (botId: string, language: string): string => `training:${botId}:${language}`
 
 export const makeTrainingSession = (language: string, lock: sdk.RedisLock): TrainingSession => ({
+  id: nanoid(),
   status: 'training',
   progress: 0,
   language,

@@ -16,7 +16,6 @@ import {
   ListEntity,
   ListEntityModel,
   NLUEngine,
-  NLUVersionInfo,
   PatternEntity,
   ProgressReporter,
   Tools,

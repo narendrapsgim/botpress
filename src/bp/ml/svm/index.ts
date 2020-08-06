@@ -1,5 +1,6 @@
 import * as sdk from 'botpress/sdk'
 import _ from 'lodash'
+import nanoid from 'nanoid'
 
 import { getMinKFold } from './grid-search/split-dataset'
 import { SVM } from './svm'
@@ -12,8 +13,17 @@ type Serialized = SvmModel & {
 export class Trainer implements sdk.MLToolkit.SVM.Trainer {
   private model?: SvmModel
   private svm?: SVM
+  private _trainingId: string = nanoid()
 
-  constructor() {}
+  constructor(private _trainSessionId: string) {}
+
+  get trainSessionId() {
+    return this._trainSessionId
+  }
+
+  get trainingId() {
+    return this._trainingId
+  }
 
   cancelTraining() {
     this.svm?.cancelTraining()

@@ -74,8 +74,9 @@ export function getOnBotMount(state: NLUState) {
                 await ModelService.saveModel(ghost, model, hash)
               }
             } else {
+              const trainSession = makeTrainingSession(languageCode, null)
               state.reportTrainingProgress(botId, 'Training not needed', {
-                language: languageCode,
+                ...trainSession,
                 progress: 1,
                 status: 'done'
               })

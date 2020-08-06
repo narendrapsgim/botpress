@@ -1,4 +1,5 @@
 import { MLToolkit } from 'botpress/sdk'
+import nanoid from 'nanoid'
 import tmp from 'tmp'
 
 import crfsuite, { Tagger as AddonTagger, Trainer as AddonTrainer } from './addon'
@@ -6,10 +7,19 @@ import crfsuite, { Tagger as AddonTagger, Trainer as AddonTrainer } from './addo
 export class Trainer implements MLToolkit.CRF.Trainer {
   private trainer: AddonTrainer
   private _cancelTraining = false
+  private _trainingId: string = nanoid()
 
-  constructor() {
+  constructor(private _trainSessionId: string) {
     // debugging should be enabled but, this slows down crf training... TODO: find a solution
     this.trainer = new crfsuite.Trainer({ debug: false })
+  }
+
+  get trainSessionId() {
+    return this._trainSessionId
+  }
+
+  get trainingId() {
+    return this._trainingId
   }
 
   public async train(
@@ -30,6 +40,9 @@ export class Trainer implements MLToolkit.CRF.Trainer {
       return this._cancelTraining ? 1 : 0
     })
 
+    if (this._cancelTraining) {
+      return ''
+    }
     return crfModelFilename
   }
 
