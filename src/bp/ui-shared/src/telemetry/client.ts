@@ -19,7 +19,6 @@ const getEventExpiry = (eventName: string) => {
 }
 
 const setEventExpiry = (eventName: string) => {
-  console.log('setEventExpiry', eventName)
   const expiry = Date.now() + eventCollectorStore[eventName].refreshInterval
   window.localStorage.setItem(eventName, expiry.toString())
 }
@@ -41,11 +40,10 @@ const sendEventIfReady = async (api: AxiosInstance, eventName: string): Promise<
   const eventData = eventCollectorStore[eventName].collectData()
   const event = await makeTelemetryEvent(api, eventName, eventData)
 
-  return await sendTelemetry([event])
+  return sendTelemetry([event])
 }
 
 const expiryEvent = response => {
-  console.log('eventResponse', response)
   for (const eventName in response) {
     response[eventName] && setEventExpiry(eventName)
   }
@@ -64,8 +62,6 @@ export const startTelemetry = (api: AxiosInstance) => {
       const response = await sendEventIfReady(api, eventName)
       answer[eventName] = response
     }
-
-    console.log('Response', answer)
 
     expiryEvent(answer)
 
